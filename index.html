@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="小码快改：网页快改，就找小码。上传 HTML 后在浏览器本地编辑并导出。" />
+    <title>小码快改</title>
+  </head>
+  <body>
+<div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <img class="brand-logo" src="./logo-transparent.png" alt="小码快改" />
+      </div>
+      <div class="toolbar">
+        <input id="fileInput" class="file-input" type="file" accept=".html,.htm,text/html" />
+        <button class="btn" id="uploadBtn">上传 HTML</button>
+        <button class="btn" id="sampleBtn">载入示例</button>
+        <button class="btn" id="previewBtn">预览</button>
+        <button class="btn" id="feedbackBtn">反馈问题</button>
+        <button class="btn success" id="exportBtn">导出 HTML</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="panel canvas-shell">
+        <div class="canvas-header">
+          <div class="doc-meta">
+            <div class="doc-name" id="docName">示例页面.html</div>
+            <div class="doc-state" id="docState">可直接编辑画布中的文字，也可以先上传自己的 HTML 文件</div>
+          </div>
+          <div class="mini-actions">
+            <button class="mini" id="undoBtn" title="撤销" aria-label="撤销">↶</button>
+            <button class="mini" id="redoBtn" title="恢复" aria-label="恢复">↷</button>
+            <button class="mini" id="zoomOutBtn" title="缩小" aria-label="缩小">−</button>
+            <select class="zoom-select" id="zoomSelect" title="画布缩放">
+              <option value="fit">适应</option>
+              <option value="0.4">40%</option>
+              <option value="0.5">50%</option>
+              <option value="0.6">60%</option>
+              <option value="0.75">75%</option>
+              <option value="0.9">90%</option>
+              <option value="1">100%</option>
+              <option value="1.25">125%</option>
+              <option value="1.5">150%</option>
+            </select>
+            <button class="mini" id="zoomInBtn" title="放大" aria-label="放大">＋</button>
+            <button class="mini" id="showCodeBtn" title="查看源码" aria-label="查看源码">&lt;/&gt;</button>
+            <button class="mini" id="clearBtn" title="清空" aria-label="清空">×</button>
+          </div>
+        </div>
+        <div class="canvas-wrap">
+          <div class="frame-card">
+            <iframe id="editorFrame" title="HTML 编辑画布"></iframe>
+            <pre class="code-drawer" id="codeDrawer"></pre>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel right-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">属性面板</h2>
+          <p class="panel-desc">点击画布中的元素后编辑它</p>
+        </div>
+        <div class="panel-body" id="propertyPanel">
+          <div class="empty">请先点击画布中的文字、图片、表格或链接。</div>
+        </div>
+      </aside>
+    </main>
+    <footer class="site-footer">
+      <span>小码快改 · 网页快改，就找小码</span>
+      <button class="footer-link" id="privacyBtn">隐私说明</button>
+    </footer>
+  </div>
+
+  <div class="modal" id="previewModal" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>导出前预览</h2>
+        <button class="btn" id="closePreviewBtn">关闭</button>
+      </div>
+      <iframe id="previewFrame" class="preview-frame" title="预览页面"></iframe>
+    </div>
+  </div>
+
+  <div class="modal" id="sourceModal" aria-hidden="true">
+    <div class="modal-card source-card">
+      <div class="modal-head">
+        <h2>源码查看</h2>
+        <div class="modal-actions">
+          <button class="btn" id="copySourceBtn">复制源码</button>
+          <button class="btn" id="closeSourceBtn">关闭</button>
+        </div>
+      </div>
+      <textarea id="sourceText" class="source-code" spellcheck="false" readonly></textarea>
+    </div>
+  </div>
+
+  <div class="modal" id="confirmModal" aria-hidden="true">
+    <div class="confirm-card">
+      <h3 id="confirmTitle">确认操作</h3>
+      <p id="confirmMessage">确定要执行此操作吗？</p>
+      <div class="confirm-actions">
+        <button class="btn" id="confirmCancelBtn">取消</button>
+        <button class="btn danger" id="confirmOkBtn">确定删除</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="feedbackModal" aria-hidden="true">
+    <div class="confirm-card info-card">
+      <h3>反馈问题</h3>
+      <p>内测阶段如果遇到页面错位、无法编辑、导出异常等问题，请尽量附上截图、原始 HTML 文件和操作步骤。</p>
+      <p class="muted-note">正式发布前可以把这里替换成问卷链接、邮箱、微信或飞书表单。</p>
+      <div class="confirm-actions">
+        <button class="btn" id="closeFeedbackBtn">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="privacyModal" aria-hidden="true">
+    <div class="confirm-card info-card">
+      <h3>隐私说明</h3>
+      <p>当前版本默认在浏览器本地读取、编辑和导出 HTML 文件，不会主动把用户上传的文件发送到服务器。</p>
+      <p class="muted-note">如果后续增加云端保存、账号体系或文件同步，需要重新补充正式隐私政策。</p>
+      <div class="confirm-actions">
+        <button class="btn" id="closePrivacyBtn">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
