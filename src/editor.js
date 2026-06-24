@@ -212,6 +212,7 @@ const $ = (selector) => document.querySelector(selector);
           doc.scrollingElement.scrollLeft = scroll.bodyLeft || scroll.x || 0;
         }
         if (win) win.scrollTo(scroll.x || scroll.bodyLeft || 0, scroll.y || scroll.bodyTop || 0);
+        editorFrame.style.visibility = "";
       });
     }
 
@@ -235,7 +236,32 @@ const $ = (selector) => document.querySelector(selector);
       });
     }
 
+    function restoreHtmlInPlace(html, options = {}) {
+      const doc = getEditorDocument();
+      if (!doc || !doc.documentElement) return false;
+      const parsed = new DOMParser().parseFromString(html, "text/html");
+      if (!parsed || !parsed.documentElement) return false;
+      selectedElement = null;
+      selectedCell = null;
+      currentFileName = options.fileName || currentFileName || "未命名.html";
+      codeDrawer.classList.remove("open");
+      doc.documentElement.innerHTML = parsed.documentElement.innerHTML;
+      doc.designMode = "on";
+      doc.body.setAttribute("data-html-editor-demo", "true");
+      injectEditorHelpers(doc);
+      renderEmptyPanel();
+      if (currentSource.type === "feixiang-deck") {
+        setEditorZoom("fit", false);
+      } else {
+        setEditorZoom(editorZoom, false);
+      }
+      setDocState(options.stateMessage || "已载入，可以在画布中直接编辑，或点击元素使用右侧属性面板");
+      restoreEditorScroll(options.scroll);
+      return true;
+    }
+
     function restoreHtmlSnapshot(html, options = {}) {
+      if (options.inPlace && restoreHtmlInPlace(html, options)) return;
       selectedElement = null;
       selectedCell = null;
       currentFileName = options.fileName || currentFileName || "未命名.html";
@@ -259,7 +285,11 @@ const $ = (selector) => document.querySelector(selector);
           setEditorZoom(editorZoom, false);
         }
         setDocState(options.stateMessage || "已载入，可以在画布中直接编辑，或点击元素使用右侧属性面板");
-        restoreEditorScroll(options.scroll);
+        if (options.scroll) {
+          restoreEditorScroll(options.scroll);
+        } else {
+          editorFrame.style.visibility = "";
+        }
       };
     }
 
@@ -500,7 +530,48 @@ const $ = (selector) => document.querySelector(selector);
       return clampZoom(Math.floor((availableWidth / 1280) * 100) / 100);
     }
 
+    function captureZoomAnchor() {
+      const doc = getEditorDocument();
+      const win = editorFrame.contentWindow;
+      const scroller = doc && doc.scrollingElement;
+      if (!doc || !win || !scroller) return null;
+      const point = selectedElement && doc.body.contains(selectedElement)
+        ? (() => {
+            const rect = selectedElement.getBoundingClientRect();
+            return {
+              x: Math.max(0, Math.min(win.innerWidth, rect.left + rect.width / 2)),
+              y: Math.max(0, Math.min(win.innerHeight, rect.top + rect.height / 2))
+            };
+          })()
+        : {
+            x: Math.max(0, win.innerWidth / 2),
+            y: Math.max(0, win.innerHeight / 2)
+          };
+      return {
+        x: (scroller.scrollLeft + point.x) / Math.max(editorZoom, 0.01),
+        y: (scroller.scrollTop + point.y) / Math.max(editorZoom, 0.01),
+        point
+      };
+    }
+
+    function restoreZoomAnchor(anchor) {
+      if (!anchor) return;
+      const doc = getEditorDocument();
+      const win = editorFrame.contentWindow;
+      const scroller = doc && doc.scrollingElement;
+      if (!doc || !win || !scroller) return;
+      requestAnimationFrame(() => {
+        const nextLeft = Math.max(0, anchor.x * Math.max(editorZoom, 0.01) - anchor.point.x);
+        const nextTop = Math.max(0, anchor.y * Math.max(editorZoom, 0.01) - anchor.point.y);
+        scroller.scrollLeft = nextLeft;
+        scroller.scrollTop = nextTop;
+        win.scrollTo(nextLeft, nextTop);
+        positionSelectionControls();
+      });
+    }
+
     function setEditorZoom(value, showMessage = true) {
+      const anchor = captureZoomAnchor();
       const isFit = value === "fit";
       editorZoom = isFit ? computeFitZoom() : clampZoom(value);
       const select = $("#zoomSelect");
@@ -521,6 +592,7 @@ const $ = (selector) => document.querySelector(selector);
         } else {
           doc.body.style.zoom = String(editorZoom);
         }
+        restoreZoomAnchor(anchor);
         requestAnimationFrame(() => refreshSelectionControls());
       }
       if (showMessage) toast(isFit ? `已适应画布：${Math.round(editorZoom * 100)}%` : `当前缩放：${Math.round(editorZoom * 100)}%`);
@@ -668,6 +740,32 @@ const $ = (selector) => document.querySelector(selector);
       createDragHandle(selectedElement);
     }
 
+    function positionSelectionControls() {
+      const doc = getEditorDocument();
+      if (!doc || !selectedElement || !doc.body.contains(selectedElement)) return;
+      const rect = selectedElement.getBoundingClientRect();
+      const points = {
+        n: [rect.left + rect.width / 2, rect.top],
+        e: [rect.right, rect.top + rect.height / 2],
+        s: [rect.left + rect.width / 2, rect.bottom],
+        w: [rect.left, rect.top + rect.height / 2],
+        ne: [rect.right, rect.top],
+        nw: [rect.left, rect.top],
+        se: [rect.right, rect.bottom],
+        sw: [rect.left, rect.bottom]
+      };
+      doc.querySelectorAll(".editor-resize-handle").forEach((handle) => {
+        const point = points[handle.dataset.dir];
+        if (!point) return;
+        handle.style.left = `${point[0] - 6}px`;
+        handle.style.top = `${point[1] - 6}px`;
+      });
+      doc.querySelectorAll(".editor-drag-handle").forEach((handle) => {
+        handle.style.left = `${rect.left - 11}px`;
+        handle.style.top = `${rect.top - 11}px`;
+      });
+    }
+
     function createResizeHandle(el) {
       const doc = getEditorDocument();
       if (!doc || !el || el === doc.body || el === doc.documentElement) return;
@@ -681,23 +779,7 @@ const $ = (selector) => document.querySelector(selector);
       });
 
       function placeHandles() {
-        if (!selectedElement || !doc.body.contains(selectedElement)) return;
-        const rect = selectedElement.getBoundingClientRect();
-        const points = {
-          n: [rect.left + rect.width / 2, rect.top],
-          e: [rect.right, rect.top + rect.height / 2],
-          s: [rect.left + rect.width / 2, rect.bottom],
-          w: [rect.left, rect.top + rect.height / 2],
-          ne: [rect.right, rect.top],
-          nw: [rect.left, rect.top],
-          se: [rect.right, rect.bottom],
-          sw: [rect.left, rect.bottom]
-        };
-        handles.forEach((handle) => {
-          const [x, y] = points[handle.dataset.dir];
-          handle.style.left = `${x - 6}px`;
-          handle.style.top = `${y - 6}px`;
-        });
+        positionSelectionControls();
       }
 
       function getLayoutSize(target) {
@@ -776,7 +858,35 @@ const $ = (selector) => document.querySelector(selector);
           const ratio = startWidth / Math.max(startHeight, 1);
           const activeCell = selectedElement.closest ? selectedElement.closest("td, th") : null;
           const activeTable = activeCell ? activeCell.closest("table") : null;
+          const tableColIndex = activeCell ? activeCell.cellIndex : -1;
+          const previousCell = activeCell && tableColIndex > 0 ? activeCell.parentElement.cells[tableColIndex - 1] : null;
+          const nextCell = activeCell && activeCell.parentElement.cells[tableColIndex + 1] ? activeCell.parentElement.cells[tableColIndex + 1] : null;
+          const tableStartWidth = activeTable ? activeTable.getBoundingClientRect().width / getResizeScale() : 0;
+          const tableStartColumnWidths = activeTable && activeTable.rows[0]
+            ? Array.from(activeTable.rows[0].cells).map((cell) => cell.getBoundingClientRect().width / getResizeScale())
+            : [];
+          const previousStartWidth = previousCell ? (tableStartColumnWidths[tableColIndex - 1] || getLayoutSize(previousCell).width) : 0;
+          const nextStartWidth = nextCell ? (tableStartColumnWidths[tableColIndex + 1] || getLayoutSize(nextCell).width) : 0;
+          if (activeTable && (dir.includes("e") || dir.includes("w"))) {
+            activeTable.style.setProperty("width", `${Math.round(tableStartWidth)}px`, "important");
+            activeTable.style.setProperty("min-width", `${Math.round(tableStartWidth)}px`, "important");
+            activeTable.style.setProperty("table-layout", "fixed", "important");
+            tableStartColumnWidths.forEach((width, index) => setTableColumnWidth(activeTable, index, width));
+          }
           let dragging = true;
+
+          function setTableColumnWidth(table, colIndex, width) {
+            if (!table || colIndex < 0) return;
+            table.style.setProperty("table-layout", "fixed", "important");
+            Array.from(table.rows).forEach((row) => {
+              if (row.cells[colIndex]) {
+                const cell = row.cells[colIndex];
+                const extras = getBoxExtras(cell);
+                const cssWidth = extras.borderBox ? width : Math.max(1, width - extras.horizontal);
+                setImportant(cell, "width", `${Math.round(cssWidth)}px`);
+              }
+            });
+          }
 
           function onMove(moveEvent) {
             if (!dragging) return;
@@ -806,15 +916,29 @@ const $ = (selector) => document.querySelector(selector);
             nextWidth = Math.max(24, Math.round(nextWidth));
             nextHeight = Math.max(24, Math.round(nextHeight));
 
-            if (activeCell && activeTable && selectedTableMode === "col") {
-              applyTableDimension(activeTable, "width", nextWidth);
-            } else if (activeCell && activeTable && selectedTableMode === "row") {
+            if (activeCell && activeTable && (dir.includes("e") || dir.includes("w"))) {
+              if (dir.includes("w") && previousCell) {
+                const nextPreviousWidth = Math.max(24, previousStartWidth + dx);
+                const adjustedWidth = Math.max(24, startWidth - dx);
+                setTableColumnWidth(activeTable, tableColIndex - 1, nextPreviousWidth);
+                setTableColumnWidth(activeTable, tableColIndex, adjustedWidth);
+                nextWidth = adjustedWidth;
+              } else if (dir.includes("e") && nextCell) {
+                const adjustedWidth = Math.max(24, startWidth + dx);
+                const nextNeighborWidth = Math.max(24, nextStartWidth - dx);
+                setTableColumnWidth(activeTable, tableColIndex, adjustedWidth);
+                setTableColumnWidth(activeTable, tableColIndex + 1, nextNeighborWidth);
+                nextWidth = adjustedWidth;
+              } else {
+                setTableColumnWidth(activeTable, tableColIndex, nextWidth);
+              }
+            } else if (activeCell && activeTable && (selectedTableMode === "row" || dir.includes("n") || dir.includes("s"))) {
               applyTableDimension(activeTable, "height", nextHeight);
             } else {
               setAnchoredPosition(selectedElement, startPosition, startWidth, startHeight, nextWidth, nextHeight, dir);
               setElementOuterSize(selectedElement, nextWidth, nextHeight, dir);
             }
-            placeHandles();
+            positionSelectionControls();
             const widthInput = $("#widthValue");
             const heightInput = $("#heightValue");
             if (widthInput) widthInput.value = nextWidth;
@@ -849,10 +973,7 @@ const $ = (selector) => document.querySelector(selector);
       doc.documentElement.appendChild(handle);
 
       function placeHandle() {
-        if (!selectedElement || !doc.body.contains(selectedElement)) return;
-        const rect = selectedElement.getBoundingClientRect();
-        handle.style.left = `${rect.left - 11}px`;
-        handle.style.top = `${rect.top - 11}px`;
+        positionSelectionControls();
       }
 
       placeHandle();
@@ -879,7 +1000,7 @@ const $ = (selector) => document.querySelector(selector);
           const nextTop = startTop + moveEvent.clientY - startY;
           selectedElement.style.setProperty("left", `${Math.round(nextLeft)}px`, "important");
           selectedElement.style.setProperty("top", `${Math.round(nextTop)}px`, "important");
-          placeHandle();
+          positionSelectionControls();
         }
 
         function onUp() {
@@ -1275,7 +1396,9 @@ const $ = (selector) => document.querySelector(selector);
         customConfirm("确认删除", "确定要删除当前选中的元素吗？删除后需要撤销才能恢复。").then((ok) => {
           if (!ok) return;
           pushHistory();
-          selectedElement.remove();
+          const target = selectedElement;
+          clearSelectionOutline();
+          target.remove();
           selectedElement = null;
           selectedCell = null;
           renderEmptyPanel();
@@ -1423,16 +1546,40 @@ const $ = (selector) => document.querySelector(selector);
       return "#" + match.slice(0, 3).map((n) => Number(n).toString(16).padStart(2, "0")).join("");
     }
 
-    function downloadHtml() {
+    async function downloadHtml() {
       const html = getFullHtml();
       if (!html) return toast("没有可导出的内容");
       trackEvent("export_start");
       const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const safeName = currentFileName.replace(/\.(html|htm)$/i, "") || "edited-page";
+      const suggestedName = `${safeName}-edited.html`;
+      if (window.showSaveFilePicker) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName,
+            types: [{
+              description: "HTML 文件",
+              accept: { "text/html": [".html", ".htm"] }
+            }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          updateMetrics("export");
+          setDocState("已导出到你选择的位置");
+          toast("导出成功");
+          return;
+        } catch (error) {
+          if (error && error.name === "AbortError") {
+            toast("已取消导出");
+            return;
+          }
+        }
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      const safeName = currentFileName.replace(/\.(html|htm)$/i, "") || "edited-page";
       a.href = url;
-      a.download = `${safeName}-edited.html`;
+      a.download = suggestedName;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -1495,8 +1642,7 @@ const $ = (selector) => document.querySelector(selector);
     $("#showCodeBtn").addEventListener("click", showCode);
     $("#feedbackBtn").addEventListener("click", () => {
       trackEvent("feedback_open");
-      $("#feedbackModal").classList.add("open");
-      $("#feedbackModal").setAttribute("aria-hidden", "false");
+      window.open("https://www.wenjuan.com/s/ueumemr/", "_blank", "noopener,noreferrer");
     });
     $("#privacyBtn").addEventListener("click", () => {
       trackEvent("privacy_open");
@@ -1534,7 +1680,8 @@ const $ = (selector) => document.querySelector(selector);
       const scroll = getEditorScroll();
       restoreHtmlSnapshot(previous, {
         stateMessage: "已撤销上一步",
-        scroll
+        scroll,
+        inPlace: true
       });
       toast("已撤销上一步");
     });
@@ -1552,7 +1699,8 @@ const $ = (selector) => document.querySelector(selector);
       const scroll = getEditorScroll();
       restoreHtmlSnapshot(next, {
         stateMessage: "已恢复上一步",
-        scroll
+        scroll,
+        inPlace: true
       });
       toast("已恢复上一步");
     });
