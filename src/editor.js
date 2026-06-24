@@ -1,6 +1,8 @@
 // 小码快改核心编辑器逻辑
 // 说明：当前版本从已验证的单文件 Demo 迁移而来，后续可继续拆分为上传、飞象适配、导出等独立模块。
 
+import { track } from '@vercel/analytics';
+
 const $ = (selector) => document.querySelector(selector);
     const editorFrame = $("#editorFrame");
     const previewFrame = $("#previewFrame");
@@ -127,6 +129,15 @@ const $ = (selector) => document.querySelector(selector);
       list.push(event);
       localStorage.setItem("xiaoma_kuaigai_events", JSON.stringify(list.slice(-200)));
       window.dispatchEvent(new CustomEvent("xiaoma:kuaigai:event", { detail: event }));
+      try {
+        track(name, {
+          fileType: currentSource.type,
+          action: name,
+          hasDetail: Object.keys(detail).length > 0
+        });
+      } catch (error) {
+        console.warn("[小码快改埋点] 线上统计发送失败", error);
+      }
       console.info("[小码快改埋点]", event);
     }
 
@@ -861,10 +872,17 @@ const $ = (selector) => document.querySelector(selector);
           const tableColIndex = activeCell ? activeCell.cellIndex : -1;
           const previousCell = activeCell && tableColIndex > 0 ? activeCell.parentElement.cells[tableColIndex - 1] : null;
           const nextCell = activeCell && activeCell.parentElement.cells[tableColIndex + 1] ? activeCell.parentElement.cells[tableColIndex + 1] : null;
+          const activeRow = activeCell ? activeCell.parentElement : null;
+          const tableRowIndex = activeRow ? activeRow.rowIndex : -1;
+          const previousRow = activeTable && tableRowIndex > 0 ? activeTable.rows[tableRowIndex - 1] : null;
           const tableStartWidth = activeTable ? activeTable.getBoundingClientRect().width / getResizeScale() : 0;
           const tableStartColumnWidths = activeTable && activeTable.rows[0]
             ? Array.from(activeTable.rows[0].cells).map((cell) => cell.getBoundingClientRect().width / getResizeScale())
             : [];
+          const tableStartRowHeights = activeTable
+            ? Array.from(activeTable.rows).map((row) => row.getBoundingClientRect().height / getResizeScale())
+            : [];
+          const previousStartHeight = previousRow ? previousRow.getBoundingClientRect().height / getResizeScale() : 0;
           const previousStartWidth = previousCell ? (tableStartColumnWidths[tableColIndex - 1] || getLayoutSize(previousCell).width) : 0;
           const nextStartWidth = nextCell ? (tableStartColumnWidths[tableColIndex + 1] || getLayoutSize(nextCell).width) : 0;
           if (activeTable && (dir.includes("e") || dir.includes("w"))) {
@@ -872,6 +890,9 @@ const $ = (selector) => document.querySelector(selector);
             activeTable.style.setProperty("min-width", `${Math.round(tableStartWidth)}px`, "important");
             activeTable.style.setProperty("table-layout", "fixed", "important");
             tableStartColumnWidths.forEach((width, index) => setTableColumnWidth(activeTable, index, width));
+          }
+          if (activeTable && (dir.includes("n") || dir.includes("s"))) {
+            tableStartRowHeights.forEach((height, index) => setTableRowHeight(activeTable.rows[index], height));
           }
           let dragging = true;
 
@@ -885,6 +906,17 @@ const $ = (selector) => document.querySelector(selector);
                 const cssWidth = extras.borderBox ? width : Math.max(1, width - extras.horizontal);
                 setImportant(cell, "width", `${Math.round(cssWidth)}px`);
               }
+            });
+          }
+
+          function setTableRowHeight(row, height) {
+            if (!row) return;
+            row.style.setProperty("height", `${Math.round(height)}px`, "important");
+            Array.from(row.cells).forEach((cell) => {
+              const extras = getBoxExtras(cell);
+              const cssHeight = extras.borderBox ? height : Math.max(1, height - extras.vertical);
+              setImportant(cell, "height", `${Math.round(cssHeight)}px`);
+              setImportant(cell, "min-height", "0");
             });
           }
 
@@ -916,7 +948,7 @@ const $ = (selector) => document.querySelector(selector);
             nextWidth = Math.max(24, Math.round(nextWidth));
             nextHeight = Math.max(24, Math.round(nextHeight));
 
-            if (activeCell && activeTable && (dir.includes("e") || dir.includes("w"))) {
+            if (activeCell && activeTable) {
               if (dir.includes("w") && previousCell) {
                 const nextPreviousWidth = Math.max(24, previousStartWidth + dx);
                 const adjustedWidth = Math.max(24, startWidth - dx);
@@ -929,11 +961,21 @@ const $ = (selector) => document.querySelector(selector);
                 setTableColumnWidth(activeTable, tableColIndex, adjustedWidth);
                 setTableColumnWidth(activeTable, tableColIndex + 1, nextNeighborWidth);
                 nextWidth = adjustedWidth;
-              } else {
+              } else if (dir.includes("e") || dir.includes("w")) {
                 setTableColumnWidth(activeTable, tableColIndex, nextWidth);
               }
-            } else if (activeCell && activeTable && (selectedTableMode === "row" || dir.includes("n") || dir.includes("s"))) {
-              applyTableDimension(activeTable, "height", nextHeight);
+
+              if (dir.includes("n") && previousRow) {
+                const nextPreviousHeight = Math.max(24, previousStartHeight + dy);
+                const adjustedHeight = Math.max(24, startHeight - dy);
+                setTableRowHeight(previousRow, nextPreviousHeight);
+                setTableRowHeight(activeRow, adjustedHeight);
+                nextHeight = adjustedHeight;
+              } else if (dir.includes("n") || dir.includes("s")) {
+                setTableRowHeight(activeRow, nextHeight);
+              }
+            } else if (activeCell && activeTable && selectedTableMode === "row") {
+              setTableRowHeight(activeRow, nextHeight);
             } else {
               setAnchoredPosition(selectedElement, startPosition, startWidth, startHeight, nextWidth, nextHeight, dir);
               setElementOuterSize(selectedElement, nextWidth, nextHeight, dir);
@@ -1242,14 +1284,25 @@ const $ = (selector) => document.querySelector(selector);
       if (!table || !selectedCell || !value) return false;
       const row = selectedCell.parentElement;
       const colIndex = selectedCell.cellIndex;
-      if (selectedTableMode === "row" && property === "height") {
-        Array.from(row.cells).forEach((cell) => setImportant(cell, "height", `${value}px`));
+      if (property === "height") {
+        row.style.setProperty("height", `${Math.round(Number(value))}px`, "important");
+        Array.from(row.cells).forEach((cell) => {
+          const extras = getBoxExtras(cell);
+          const cssHeight = extras.borderBox ? Number(value) : Math.max(1, Number(value) - extras.vertical);
+          setImportant(cell, "height", `${Math.round(cssHeight)}px`);
+          setImportant(cell, "min-height", "0");
+        });
         return true;
       }
-      if (selectedTableMode === "col" && property === "width") {
+      if (property === "width") {
         table.style.setProperty("table-layout", "fixed", "important");
         Array.from(table.rows).forEach((tr) => {
-          if (tr.cells[colIndex]) setImportant(tr.cells[colIndex], "width", `${value}px`);
+          if (tr.cells[colIndex]) {
+            const cell = tr.cells[colIndex];
+            const extras = getBoxExtras(cell);
+            const cssWidth = extras.borderBox ? Number(value) : Math.max(1, Number(value) - extras.horizontal);
+            setImportant(cell, "width", `${Math.round(cssWidth)}px`);
+          }
         });
         return true;
       }
